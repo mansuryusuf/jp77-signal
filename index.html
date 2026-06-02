@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JP77 Signal Dashboard — Traders Family</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ───── SETTINGS MODAL ───── -->
+<div id="settingsModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">⚙ Konfigurasi API Keys</span>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Finnhub API Key <span class="badge-free">FREE</span></label>
+        <input type="password" id="finnhubKeyInput" placeholder="Daftar gratis di finnhub.io" />
+        <p class="help-text">Untuk harga live forex. Tanpa key → mode simulasi aktif.</p>
+      </div>
+      <div class="form-group">
+        <label>Anthropic API Key <span class="badge-ai">AI</span></label>
+        <input type="password" id="anthropicKeyInput" placeholder="Dari console.anthropic.com" />
+        <p class="help-text">Untuk analisis AI gaya JP77. Tanpa key → analisis dinonaktifkan.</p>
+      </div>
+      <div class="warning-box">
+        ⚠️ <strong>Catatan Keamanan:</strong> Keys disimpan di localStorage browser Anda.
+        Gunakan hanya di perangkat pribadi. Jangan deploy ke server publik dengan key hardcoded.
+      </div>
+      <button class="btn-save" onclick="saveSettings()">💾 Simpan & Mulai</button>
+      <button class="btn-demo" onclick="useDemo()">🎮 Gunakan Mode Demo</button>
+    </div>
+  </div>
+</div>
+
+<!-- ───── HEADER ───── -->
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="logo">
+      <span class="logo-icon">◈</span>
+      <div>
+        <span class="logo-main">JP77 Signal</span>
+        <span class="logo-sub">Traders Family Method</span>
+      </div>
+    </div>
+    <div id="liveIndicator" class="live-badge demo">
+      <span class="live-dot"></span>
+      <span id="liveText">DEMO</span>
+    </div>
+  </div>
+  <div class="topbar-center">
+    <div class="pair-tabs" id="pairTabs">
+      <button class="pair-tab active" data-pair="EURUSD">EUR/USD</button>
+      <button class="pair-tab" data-pair="GBPUSD">GBP/USD</button>
+      <button class="pair-tab" data-pair="XAUUSD">XAU/USD</button>
+      <button class="pair-tab" data-pair="USDJPY">USD/JPY</button>
+      <button class="pair-tab" data-pair="GBPJPY">GBP/JPY</button>
+      <button class="pair-tab" data-pair="AUDUSD">AUD/USD</button>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="session-clock">
+      <span id="sessionLabel" class="session-tag">—</span>
+      <span id="clockDisplay" class="clock">00:00:00</span>
+    </div>
+    <button class="btn-icon" onclick="openSettings()" title="Pengaturan">⚙</button>
+  </div>
+</header>
+
+<!-- ───── PRICE BAR ───── -->
+<div class="pricebar">
+  <div class="price-main">
+    <span id="pairLabel" class="price-pair">EUR/USD</span>
+    <span id="priceDisplay" class="price-value">—</span>
+    <span id="priceChange" class="price-change neutral">—</span>
+  </div>
+  <div class="price-meta">
+    <span id="bidAsk">Bid: — | Ask: —</span>
+    <span id="spreadDisplay">Spread: —</span>
+    <span id="sessionInfo">Session: —</span>
+  </div>
+</div>
+
+<!-- ───── MAIN GRID ───── -->
+<main class="main-grid">
+
+  <!-- LEFT: Chart -->
+  <div class="panel chart-panel">
+    <div class="panel-header">
+      <span class="panel-title">Price Action Chart</span>
+      <div class="chart-controls">
+        <button class="tf-btn active" data-tf="M5">M5</button>
+        <button class="tf-btn" data-tf="M15">M15</button>
+        <button class="tf-btn" data-tf="H1">H1</button>
+        <button class="tf-btn" data-tf="H4">H4</button>
+      </div>
+    </div>
+    <div id="chartContainer" class="chart-container">
+      <canvas id="priceChart"></canvas>
+      <div id="chartOverlay" class="chart-overlay">
+        <div class="overlay-content">
+          <div class="spinner"></div>
+          <p>Memuat data harga...</p>
+        </div>
+      </div>
+    </div>
+    <div class="sr-legend">
+      <span class="sr-item resistance"><span class="sr-dot r"></span>R2 <span id="r2Val">—</span></span>
+      <span class="sr-item resistance"><span class="sr-dot r"></span>R1 <span id="r1Val">—</span></span>
+      <span class="sr-item neutral"><span class="sr-dot n"></span>Now <span id="nowVal">—</span></span>
+      <span class="sr-item support"><span class="sr-dot s"></span>S1 <span id="s1Val">—</span></span>
+      <span class="sr-item support"><span class="sr-dot s"></span>S2 <span id="s2Val">—</span></span>
+    </div>
+  </div>
+
+  <!-- RIGHT: Signal -->
+  <div class="panel signal-panel">
+    <div class="panel-header">
+      <span class="panel-title">Signal JP77</span>
+      <span id="signalTimestamp" class="panel-meta">—</span>
+    </div>
+
+    <!-- Signal Badge -->
+    <div id="signalBadge" class="signal-badge neutral">
+      <span id="signalIcon">⏸</span>
+      <span id="signalBias">WAIT</span>
+    </div>
+
+    <!-- Method & Confidence -->
+    <div class="signal-meta-row">
+      <div class="meta-chip">
+        <span class="meta-label">Metode</span>
+        <span id="methodDisplay" class="meta-value">—</span>
+      </div>
+      <div class="meta-chip">
+        <span class="meta-label">Confidence</span>
+        <span id="confDisplay" class="meta-value">—</span>
+      </div>
+      <div class="meta-chip">
+        <span class="meta-label">Trend</span>
+        <span id="trendDisplay" class="meta-value">—</span>
+      </div>
+    </div>
+
+    <!-- Confidence Bar -->
+    <div class="conf-bar-wrap">
+      <div class="conf-bar" id="confBar" style="width:0%"></div>
+    </div>
+
+    <!-- TP/SL Setup -->
+    <div class="tpsl-grid" id="tpslGrid">
+      <div class="tpsl-card entry">
+        <div class="tpsl-label">ENTRY</div>
+        <div class="tpsl-value" id="entryVal">—</div>
+        <div class="tpsl-pip" id="entryNote">—</div>
+      </div>
+      <div class="tpsl-card tp">
+        <div class="tpsl-label">TAKE PROFIT</div>
+        <div class="tpsl-value" id="tpVal">—</div>
+        <div class="tpsl-pip" id="tpPips">— pips</div>
+      </div>
+      <div class="tpsl-card sl">
+        <div class="tpsl-label">STOP LOSS</div>
+        <div class="tpsl-value" id="slVal">—</div>
+        <div class="tpsl-pip" id="slPips">— pips</div>
+      </div>
+    </div>
+
+    <!-- R:R Slider -->
+    <div class="rr-control">
+      <div class="rr-header">
+        <span>Risk / Reward</span>
+        <span id="rrDisplay" class="rr-value">1 : 2</span>
+      </div>
+      <input type="range" id="rrSlider" min="1" max="4" step="0.5" value="2" />
+      <div class="rr-ticks">
+        <span>1:1</span><span>1:2</span><span>1:3</span><span>1:4</span>
+      </div>
+    </div>
+
+    <!-- Signal Refresh -->
+    <button class="btn-refresh" onclick="App.refreshSignal()">
+      ↻ Refresh Signal
+    </button>
+  </div>
+
+</main>
+
+<!-- ───── BOTTOM PANELS ───── -->
+<section class="bottom-grid">
+
+  <!-- Money Management -->
+  <div class="panel mm-panel">
+    <div class="panel-header">
+      <span class="panel-title">💰 Money Management</span>
+      <span class="panel-meta">JP77 Rule: max 2-3% risk</span>
+    </div>
+    <div class="mm-inputs">
+      <div class="input-group">
+        <label>Modal (USD)</label>
+        <input type="number" id="balanceInput" value="1000" min="100" step="100" />
+      </div>
+      <div class="input-group">
+        <label>Risk % <span id="riskPctLabel">2%</span></label>
+        <input type="range" id="riskSlider" min="0.5" max="5" step="0.5" value="2" />
+      </div>
+    </div>
+    <div class="mm-results" id="mmResults">
+      <div class="mm-stat">
+        <span class="mm-label">Risk Amount</span>
+        <span class="mm-value danger" id="riskAmt">$20.00</span>
+      </div>
+      <div class="mm-stat">
+        <span class="mm-label">Lot Size</span>
+        <span class="mm-value" id="lotSize">0.02 lot</span>
+      </div>
+      <div class="mm-stat">
+        <span class="mm-label">Profit Target</span>
+        <span class="mm-value success" id="profitTarget">$40.00</span>
+      </div>
+      <div class="mm-stat">
+        <span class="mm-label">Max Drawdown</span>
+        <span class="mm-value warning" id="maxDD">30%</span>
+      </div>
+    </div>
+    <div id="riskWarning" class="risk-warning hidden">
+      ⚠ Risk terlalu tinggi! JP77 rekomendasi maks 3%
+    </div>
+
+    <!-- Growth projection mini table -->
+    <div class="growth-table">
+      <div class="growth-header">Proyeksi 6 Bulan (18%/bln)</div>
+      <table id="growthTable"></table>
+    </div>
+  </div>
+
+  <!-- AI Analysis -->
+  <div class="panel ai-panel">
+    <div class="panel-header">
+      <span class="panel-title">🤖 Analisis AI — Gaya JP77</span>
+      <button class="btn-analyze" id="analyzeBtn" onclick="App.runAIAnalysis()">
+        Analisis ↗
+      </button>
+    </div>
+    <div id="aiContent" class="ai-content">
+      <div class="ai-placeholder">
+        <div class="ai-icon">◈</div>
+        <p>Klik <strong>Analisis</strong> untuk mendapatkan morning briefing JP77 dari AI.</p>
+        <p class="ai-note">Membutuhkan Anthropic API key di pengaturan.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trading Plan Checklist -->
+  <div class="panel checklist-panel">
+    <div class="panel-header">
+      <span class="panel-title">📋 Morning Briefing Checklist</span>
+      <span id="checkProgress" class="panel-meta">0/7</span>
+    </div>
+    <div class="checklist-progress">
+      <div id="checkBar" class="check-bar" style="width:0%"></div>
+    </div>
+    <div class="checklist" id="checklist"></div>
+
+    <div class="principles">
+      <div class="principle-title">⚡ Prinsip JP77</div>
+      <div class="principle-item">
+        <span class="p-icon">🔵</span>
+        <span><strong>Support & Resistance</strong> — Pondasi utama. Bukan indikator rumit.</span>
+      </div>
+      <div class="principle-item">
+        <span class="p-icon">🟢</span>
+        <span><strong>Ranging / Breakout</strong> — Dua metode untuk semua kondisi market.</span>
+      </div>
+      <div class="principle-item">
+        <span class="p-icon">🔴</span>
+        <span><strong>Cut Loss Berani</strong> — Bukan kalah, tapi bagian dari plan.</span>
+      </div>
+      <div class="principle-item">
+        <span class="p-icon">🟡</span>
+        <span><strong>Max DD 30%</strong> — Trading adalah bisnis, bukan gambling.</span>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<footer class="footer">
+  <span>⚠ Tool ini hanya untuk tujuan edukasi. Bukan rekomendasi investasi.</span>
+  <span>Trading forex mengandung risiko tinggi. Gunakan modal yang siap hilang.</span>
+  <a href="https://tradersfamily.id" target="_blank" rel="noopener">Traders Family ↗</a>
+</footer>
+
+<!-- Scripts -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
