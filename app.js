@@ -225,49 +225,49 @@ const Indicators = {
    SIMULATION ENGINE (no API key)
 ──────────────────────────────────── */
 const SimEngine = {
-  prices: { ...BASE_SIM },
-  ticks:  {},
 
-  start(pair) {
+  /**
+   * @param {string} pair
+   * @param {number|null} basePrice  — gunakan harga real jika tersedia, fallback ke BASE_SIM
+   */
+  start(pair, basePrice = null) {
     this.stop();
-    const base = BASE_SIM[pair];
     const cfg  = PAIRS[pair];
+    // PENTING: Selalu pakai harga real jika diberikan, bukan hardcoded BASE_SIM
+    const base = basePrice && basePrice > 0 ? basePrice : BASE_SIM[pair];
     let   p    = base;
 
-    // Generate initial history (80 candles)
+    // Generate historical candles (80 candles) berbasis harga real
     const history = [];
-    let hp = base * (0.998 + Math.random() * 0.004);
+    let hp = base;
     for (let i = 80; i >= 0; i--) {
       const o = hp;
-      hp += (Math.random() - 0.49) * cfg.pipSize * 25;
-      const h = Math.max(o, hp) + cfg.pipSize * Math.random() * 5;
-      const l = Math.min(o, hp) - cfg.pipSize * Math.random() * 5;
-      history.push({
-        time:  Date.now() - i * 60000 * 5,
-        open:  +o.toFixed(cfg.digits),
-        high:  +h.toFixed(cfg.digits),
-        low:   +l.toFixed(cfg.digits),
-        close: +hp.toFixed(cfg.digits),
-      });
+      hp += (Math.random() - 0.495) * cfg.pipSize * 20;
+      hp  = +hp.toFixed(cfg.digits);
+      const h = +(Math.max(o, hp) + cfg.pipSize * (Math.random() * 3)).toFixed(cfg.digits);
+      const l = +(Math.min(o, hp) - cfg.pipSize * (Math.random() * 3)).toFixed(cfg.digits);
+      history.push({ time: Date.now() - i * 60000 * 5, open: o, high: h, low: l, close: hp });
     }
 
-    State.candles = history;
+    State.candles      = history;
     State.currentPrice = hp;
     State.priceOpen    = history[0].open;
 
     App.onNewCandle();
 
-    // Live tick simulation
+    // Tick simulasi — bergerak relatif terhadap harga terakhir
     State.demoInterval = setInterval(() => {
-      const drift = (Math.random() - 0.495);
-      p += drift * cfg.pipSize * 8;
+      p += (Math.random() - 0.495) * cfg.pipSize * 6;
       p  = +p.toFixed(cfg.digits);
       App.onTick(p);
     }, 800);
   },
 
   stop() {
-    if (State.demoInterval) { clearInterval(State.demoInterval); State.demoInterval = null; }
+    if (State.demoInterval) {
+      clearInterval(State.demoInterval);
+      State.demoInterval = null;
+    }
   },
 };
 
@@ -276,28 +276,47 @@ const SimEngine = {
 ──────────────────────────────────── */
 const FinnhubEngine = {
 
-  async fetchCandles(pair, resolution = 5) {
+  /** Ambil harga terkini via REST — untuk validasi & fallback */
+  async fetchQuote(pair) {
     const key = localStorage.getItem('finnhubKey');
-    const sym = PAIRS[pair].finnhub;
-    const to   = Math.floor(Date.now() / 1000);
-    const from = to - 60 * resolution * 100;
-    const url  = `https://finnhub.io/api/v1/forex/candle?symbol=${sym}&resolution=${resolution}&from=${from}&to=${to}&token=${key}`;
-
+    if (!key) return null;
     try {
-      const res  = await fetch(url);
-      const data = await res.json();
-      if (data.s !== 'ok') return null;
+      const sym = PAIRS[pair].finnhub;
+      const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${key}`);
+      const d   = await res.json();
+      return (d && d.c > 0) ? d : null;
+    } catch { return null; }
+  },
 
-      return data.t.map((t, i) => ({
+  /** Ambil historical candles + validasi cocok dengan harga live */
+  async fetchCandles(pair, resolution = 5, currentPrice = null) {
+    const key = localStorage.getItem('finnhubKey');
+    if (!key) return null;
+    const sym  = PAIRS[pair].finnhub;
+    const to   = Math.floor(Date.now() / 1000);
+    const from = to - 60 * resolution * 120;
+    try {
+      const res  = await fetch(`https://finnhub.io/api/v1/forex/candle?symbol=${sym}&resolution=${resolution}&from=${from}&to=${to}&token=${key}`);
+      const data = await res.json();
+      if (data.s !== 'ok' || !data.t?.length) return null;
+
+      const candles = data.t.map((t, i) => ({
         time:  t * 1000,
-        open:  data.o[i],
-        high:  data.h[i],
-        low:   data.l[i],
-        close: data.c[i],
+        open:  data.o[i], high: data.h[i],
+        low:   data.l[i], close: data.c[i],
       }));
-    } catch {
-      return null;
-    }
+
+      // VALIDASI: tolak candles jika harganya menyimpang >5% dari harga live
+      if (currentPrice && currentPrice > 0) {
+        const lastClose = candles[candles.length - 1].close;
+        const dev = Math.abs(lastClose - currentPrice) / currentPrice;
+        if (dev > 0.05) {
+          console.warn(`[JP77] Candle stale (dev=${(dev*100).toFixed(1)}%) — pakai simulasi berbasis harga live`);
+          return null;
+        }
+      }
+      return candles;
+    } catch { return null; }
   },
 
   connectWS(pair) {
@@ -715,39 +734,66 @@ const App = {
   },
 
   async loadPair(pair) {
-    State.pair = pair;
-    State.candles = [];
+    State.pair        = pair;
+    State.candles     = [];
     State.currentPrice = null;
-    State.signal = null;
-    State.tpsl   = null;
+    State.signal      = null;
+    State.tpsl        = null;
+    this._tickCount   = 0;
 
-    // Update tab UI
+    // Update UI tab
     document.querySelectorAll('.pair-tab').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.pair === pair);
     });
-
-    const fmtPair = pair.replace('USDJPY','USD/JPY').replace('GBPJPY','GBP/JPY').replace('AUDUSD','AUD/USD').replace('EURUSD','EUR/USD').replace('GBPUSD','GBP/USD').replace('XAUUSD','XAU/USD');
-    document.getElementById('pairLabel').textContent = fmtPair;
+    const fmt = { EURUSD:'EUR/USD', GBPUSD:'GBP/USD', XAUUSD:'XAU/USD',
+                  USDJPY:'USD/JPY', GBPJPY:'GBP/JPY', AUDUSD:'AUD/USD' };
+    document.getElementById('pairLabel').textContent = fmt[pair] || pair;
     document.getElementById('chartOverlay').classList.remove('hidden');
 
     SimEngine.stop();
     FinnhubEngine.disconnect();
 
     if (State.demoMode) {
-      SimEngine.start(pair);
+      // Mode demo murni — simulasi dari BASE_SIM
+      SimEngine.start(pair, null);
     } else {
-      const candles = await FinnhubEngine.fetchCandles(pair, 5);
+      // ── LIVE MODE ──
+      // LANGKAH 1: Ambil harga terkini dulu via Quote API
+      const quote = await FinnhubEngine.fetchQuote(pair);
+      const livePrice = quote?.c || null;
+
+      if (livePrice) {
+        State.currentPrice = livePrice;
+        State.priceOpen    = quote.o || livePrice;
+        UI.updatePrice(livePrice);
+      }
+
+      // LANGKAH 2: Coba ambil historical candles, validasi vs harga live
+      const candles = await FinnhubEngine.fetchCandles(pair, 5, livePrice);
+
       if (candles && candles.length > 10) {
-        State.candles = candles;
-        State.currentPrice = candles[candles.length-1].close;
+        // Candles valid — pakai data real
+        State.candles   = candles;
+        State.currentPrice = livePrice || candles[candles.length-1].close;
         State.priceOpen    = candles[0].open;
         this.onNewCandle();
       } else {
-        SimEngine.start(pair); // fallback
+        // Candles tidak valid / tidak tersedia
+        // Simulasi berbasis harga LIVE (bukan hardcoded BASE_SIM)
+        console.warn('[JP77] Candles tidak tersedia, simulasi berbasis harga live:', livePrice);
+        SimEngine.start(pair, livePrice);
+        // Override currentPrice ke harga live jika ada
+        if (livePrice) {
+          State.currentPrice = livePrice;
+          UI.updatePrice(livePrice);
+        }
       }
+
+      // LANGKAH 3: Connect WebSocket untuk tick realtime
       FinnhubEngine.connectWS(pair);
     }
   },
+
 
   onNewCandle() {
     if (!State.candles.length) return;
@@ -764,20 +810,28 @@ const App = {
   },
 
   onTick(price) {
+    // VALIDASI: Tolak tick jika menyimpang >3% dari harga terakhir (filter anomali/stale data)
+    if (State.currentPrice && State.currentPrice > 0) {
+      const dev = Math.abs(price - State.currentPrice) / State.currentPrice;
+      if (dev > 0.03) {
+        console.warn(`[JP77] Tick anomali: ${price} vs current ${State.currentPrice} (dev ${(dev*100).toFixed(2)}%) — diabaikan`);
+        return;
+      }
+    }
+
     State.currentPrice = price;
     UI.updatePrice(price);
     ChartEngine.appendTick(price);
 
-    // Every ~20 ticks, update S/R (debounce-ish)
+    // Setiap 15 ticks: update candle terakhir + recalc S/R & signal
     if (!this._tickCount) this._tickCount = 0;
     this._tickCount++;
-    if (this._tickCount % 20 === 0) {
-      // Append to candle history
+    if (this._tickCount % 15 === 0) {
       const last = State.candles[State.candles.length - 1];
       if (last) {
         last.close = price;
-        last.high  = Math.max(last.high, price);
-        last.low   = Math.min(last.low, price);
+        last.high  = Math.max(last.high,  price);
+        last.low   = Math.min(last.low,   price);
       }
       State.sr     = Indicators.calcSR(State.candles);
       State.signal = Indicators.detectSignal(State.candles, State.sr);
@@ -787,6 +841,7 @@ const App = {
       UI.updateMM();
     }
   },
+
 
   refreshSignal() {
     if (!State.candles.length) return;
@@ -829,11 +884,12 @@ document.addEventListener('DOMContentLoaded', () => {
       State.tf = btn.dataset.tf;
       const tfMap = { M5:5, M15:15, H1:60, H4:240 };
       if (!State.demoMode) {
-        FinnhubEngine.fetchCandles(State.pair, tfMap[State.tf] || 5).then(candles => {
+        FinnhubEngine.fetchCandles(State.pair, tfMap[State.tf] || 5, State.currentPrice).then(candles => {
           if (candles?.length) {
             State.candles = candles;
-            State.currentPrice = candles[candles.length-1].close;
             App.onNewCandle();
+          } else if (State.currentPrice) {
+            SimEngine.start(State.pair, State.currentPrice);
           }
         });
       }
